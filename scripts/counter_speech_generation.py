@@ -1,3 +1,5 @@
+
+import os
 import json
 import requests
 import numpy as np
@@ -5,6 +7,7 @@ import pandas as pd
 import faiss
 import torch
 
+from dotenv import load_dotenv
 from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 from rouge_score import rouge_scorer
@@ -12,52 +15,133 @@ from bert_score import score as bert_score
 import sacrebleu
 
 
+# ============================================================
+# LOAD ENVIRONMENT CONFIGURATION
+# ============================================================
+
+load_dotenv()
 
 
-FAISS_PATH = r"C:\Users\ACER\fact_cn\corpus_improved.index"
+def get_required_env(name):
+    """Read a required environment variable."""
+    value = os.getenv(name)
 
-TEXT_PATH = r"C:\Users\ACER\fact_cn\texts_improved.npy"
+    if not value:
+        raise ValueError(
+            f"{name} is missing from the .env file."
+        )
 
-DATASET_PATH = (
-    r"C:\Users\ACER\fact_cn\Original dataset"
-    r"\multitarget_KN_grounded_CN_unique.csv"
-)
-
-OUTPUT_JSONL = (
-    r"C:\Users\ACER\fact_cn\results"
-    r"\KN_results.jsonl"
-)
+    return value
 
 
+def get_int_env(name):
+    """Read an integer environment variable."""
+    value = get_required_env(name)
+
+    try:
+        return int(value)
+    except ValueError:
+        raise ValueError(
+            f"{name} must contain an integer value."
+        )
 
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+# ------------------------------------------------------------
+# Input and output paths
+# ------------------------------------------------------------
 
-MODEL = "mistral:7b"
-
-TAVILY_API_KEY = "TAVILY_API_KEY"
-
-TAVILY_URL = "https://api.tavily.com/search"
-
-PERSPECTIVE_API_KEY = "AIzaSyAHfRzBoCvk5yeqc3x-fi3qILangbLpShs"
-
-PERSPECTIVE_URL = (
-    "https://commentanalyzer.googleapis.com/v1alpha1/comments:analyze"
-    f"?key={PERSPECTIVE_API_KEY}"
-)
+FAISS_PATH = get_required_env("FAISS_INDEX_PATH")
+TEXT_PATH = get_required_env("TEXT_METADATA_PATH")
+DATASET_PATH = get_required_env("GENERATION_DATASET_PATH")
+OUTPUT_JSONL = get_required_env("GENERATION_OUTPUT_PATH")
 
 
+# ------------------------------------------------------------
+# Ollama configuration
+# ------------------------------------------------------------
+
+OLLAMA_URL = get_required_env("OLLAMA_URL")
+MODEL = get_required_env("OLLAMA_MODEL")
+OLLAMA_TIMEOUT = get_int_env("OLLAMA_TIMEOUT")
 
 
-DEVICE = torch.device(
-    "cuda" if torch.cuda.is_available() else "cpu"
-)
+# ------------------------------------------------------------
+# Tavily configuration
+# ------------------------------------------------------------
+
+TAVILY_API_KEY = get_required_env("TAVILY_API_KEY")
+TAVILY_URL = get_required_env("TAVILY_URL")
+TAVILY_SEARCH_DEPTH = get_required_env("TAVILY_SEARCH_DEPTH")
+TAVILY_MAX_RESULTS = get_int_env("TAVILY_MAX_RESULTS")
+TAVILY_TOKEN_LIMIT = get_int_env("TAVILY_TOKEN_LIMIT")
+TAVILY_TIMEOUT = get_int_env("TAVILY_TIMEOUT")
+
+
+# ------------------------------------------------------------
+# Google Perspective API configuration
+# ------------------------------------------------------------
+
+PERSPECTIVE_API_KEY = get_required_env("PERSPECTIVE_API_KEY")
+PERSPECTIVE_URL = get_required_env("PERSPECTIVE_URL")
+PERSPECTIVE_TIMEOUT = get_int_env("PERSPECTIVE_TIMEOUT")
+PERSPECTIVE_LANGUAGE = get_required_env("PERSPECTIVE_LANGUAGE")
+PERSPECTIVE_ATTRIBUTE = get_required_env("PERSPECTIVE_ATTRIBUTE")
+
+
+# ------------------------------------------------------------
+# Embedding configuration
+# ------------------------------------------------------------
+
+EMBEDDING_MODEL = get_required_env("EMBEDDING_MODEL")
+EMBEDDING_DEVICE = get_required_env("EMBEDDING_DEVICE")
+
+
+# ------------------------------------------------------------
+# FAISS retrieval configuration
+# ------------------------------------------------------------
+
+FAISS_NPROBE = get_int_env("FAISS_NPROBE")
+RETRIEVAL_TOP_K = get_int_env("RETRIEVAL_TOP_K")
+NUM_SEARCH_QUERIES = get_int_env("NUM_SEARCH_QUERIES")
+
+
+# ------------------------------------------------------------
+# Evaluation configuration
+# ------------------------------------------------------------
+
+ROUGE_METRIC = get_required_env("ROUGE_METRIC")
+BERTSCORE_LANGUAGE = get_required_env("BERTSCORE_LANGUAGE")
+BLEU_TOKENIZATION = get_required_env("BLEU_TOKENIZATION")
+
+
+# Validate configuration
+
+if RETRIEVAL_TOP_K <= 0 or NUM_SEARCH_QUERIES <= 0:
+    raise ValueError(
+        "RETRIEVAL_TOP_K and NUM_SEARCH_QUERIES must be positive."
+    )
+
+if FAISS_NPROBE <= 0:
+    raise ValueError("FAISS_NPROBE must be positive.")
+
+
+# ============================================================
+# DEVICE CONFIGURATION
+# ============================================================
+
+if EMBEDDING_DEVICE.lower() == "cuda" and not torch.cuda.is_available():
+    raise RuntimeError(
+        "CUDA was selected in .env, but CUDA is not available."
+    )
+
+DEVICE = torch.device(EMBEDDING_DEVICE)
 
 print("Using device:", DEVICE)
 
 
-
-
+# ============================================================
+# LOAD FAISS INDEX AND TEXT METADATA
+# ============================================================
 
 index = faiss.read_index(FAISS_PATH)
 
@@ -66,14 +150,15 @@ texts = np.load(
     allow_pickle=True
 )
 
-
-
 embedder = SentenceTransformer(
-    "all-MiniLM-L6-v2",
+    EMBEDDING_MODEL,
     device=DEVICE.type
 )
 
 
+# ============================================================
+# TEXT PREPROCESSING
+# ============================================================
 
 def normalize_text(text):
 
@@ -82,32 +167,23 @@ def normalize_text(text):
 
     text = str(text)
 
-   
-
     try:
-
         text = text.encode(
             "latin1"
         ).decode(
             "utf-8"
         )
-
-    except:
+    except Exception:
         pass
-
-   
 
     text = " ".join(text.split())
 
     return text.strip()
 
 
-
 def clean_retrieved_text(text):
 
     text = normalize_text(text)
-
- 
 
     if len(text) > 0:
 
@@ -116,28 +192,30 @@ def clean_retrieved_text(text):
             last_period = text.rfind(".")
 
             if last_period != -1:
-
                 text = text[:last_period + 1]
 
     return text.strip()
 
 
-
+# ============================================================
+# OLLAMA GENERATION
+# ============================================================
 
 def call_ollama(prompt):
 
     payload = {
-
         "model": MODEL,
-
         "prompt": prompt
     }
 
     response = requests.post(
         OLLAMA_URL,
         json=payload,
-        stream=True
+        stream=True,
+        timeout=OLLAMA_TIMEOUT
     )
+
+    response.raise_for_status()
 
     full_response = ""
 
@@ -146,9 +224,7 @@ def call_ollama(prompt):
         if line:
 
             try:
-
                 data = json.loads(
-
                     line.decode(
                         "utf-8",
                         errors="ignore"
@@ -160,27 +236,28 @@ def call_ollama(prompt):
                     ""
                 )
 
-            except:
+            except Exception:
                 pass
 
     return full_response.strip()
 
 
-
-
 def clean_output_text(text):
 
     text = text.replace("\n", " ")
-
     text = " ".join(text.split())
 
     return text.strip()
 
 
+# ============================================================
+# SEARCH QUERY GENERATION
+# ============================================================
+
 def generate_queries(hate_speech):
 
     prompt = f"""
-Generate exactly 2 factual search queries
+Generate exactly {NUM_SEARCH_QUERIES} factual search queries
 to verify claims in:
 
 {hate_speech}
@@ -198,7 +275,7 @@ Format:
 
         line = line.strip()
 
-        if line.startswith(("1.", "2.")):
+        if line and line[0].isdigit() and "." in line:
 
             q = line.split(".", 1)[1].strip()
 
@@ -210,21 +287,25 @@ Format:
             q = q.split(" - ")[0].strip()
 
             q = q.replace('\\"', '')
-
             q = q.replace('"', '')
-
-            q = q.replace("'", "")
+            q = q.replace("'", '')
 
             q = normalize_text(q)
 
-            queries.append(q)
+            if q:
+                queries.append(q)
 
-    return queries[:2]
+    return queries[:NUM_SEARCH_QUERIES]
 
 
+# ============================================================
+# STATIC KNOWLEDGE BASE RETRIEVAL
+# ============================================================
 
+def search_corpus(query, k=None):
 
-def search_corpus(query, k=2):
+    if k is None:
+        k = RETRIEVAL_TOP_K
 
     q_emb = embedder.encode(
         [query]
@@ -232,7 +313,7 @@ def search_corpus(query, k=2):
 
     faiss.normalize_L2(q_emb)
 
-    index.nprobe = 10
+    index.nprobe = FAISS_NPROBE
 
     distances, indices = index.search(
         q_emb,
@@ -253,22 +334,30 @@ def search_corpus(query, k=2):
 
         results.append({
 
-            "text":
-                clean_retrieved_text(
-                    doc.get(
-                        "text",
-                        ""
-                    )
-                ),
+            "text": clean_retrieved_text(
+                doc.get(
+                    "text",
+                    ""
+                )
+            ),
 
-            "similarity_score":
-                float(f"{score:.4f}")
+            "similarity_score": float(
+                f"{score:.4f}"
+            )
+
         })
 
     return results
 
 
-def tavily_search(query, k=2):
+# ============================================================
+# TAVILY WEB SEARCH
+# ============================================================
+
+def tavily_search(query, k=None):
+
+    if k is None:
+        k = TAVILY_MAX_RESULTS
 
     payload = {
 
@@ -276,11 +365,11 @@ def tavily_search(query, k=2):
 
         "query": query,
 
-        "search_depth": "advanced",
+        "search_depth": TAVILY_SEARCH_DEPTH,
 
         "max_results": k,
 
-        "n_tokens": 2048
+        "n_tokens": TAVILY_TOKEN_LIMIT
     }
 
     try:
@@ -288,8 +377,10 @@ def tavily_search(query, k=2):
         response = requests.post(
             TAVILY_URL,
             json=payload,
-            timeout=25
+            timeout=TAVILY_TIMEOUT
         )
+
+        response.raise_for_status()
 
         data = response.json()
 
@@ -321,6 +412,9 @@ def tavily_search(query, k=2):
         return []
 
 
+# ============================================================
+# DOCUMENT RELEVANCE GRADING
+# ============================================================
 
 def grade(document, query, hate_speech):
 
@@ -329,12 +423,15 @@ Determine whether the document is relevant
 for countering the hate speech.
 
 Query:
+
 {query}
 
 Hate Speech:
+
 {hate_speech}
 
 Document:
+
 {document}
 
 Reject documents that:
@@ -350,8 +447,11 @@ Accept only documents that:
 - provide constructive evidence
 
 Answer ONLY:
+
 relevant
+
 or
+
 irrelevant
 """
 
@@ -364,6 +464,9 @@ irrelevant
     )
 
 
+# ============================================================
+# EVIDENCE AGGREGATION
+# ============================================================
 
 def aggregate_evidence(
     documents,
@@ -388,21 +491,26 @@ Requirements:
 - Focus only on evidence useful for countering hate speech
 
 Hate Speech:
+
 {hate_speech}
 
 Documents:
+
 {combined_docs}
 
 Concise Evidence Summary:
 """
 
     return normalize_text(
-
         clean_output_text(
             call_ollama(prompt)
         )
     )
 
+
+# ============================================================
+# COUNTER-SPEECH GENERATION
+# ============================================================
 
 def generate_cs(
     summary,
@@ -416,22 +524,26 @@ in 3-4 respectful sentences.
 Use ONLY the evidence below.
 
 Evidence:
+
 {summary}
 
 Hate Speech:
+
 {hate_speech}
 
 Counter Speech:
 """
 
     return normalize_text(
-
         clean_output_text(
             call_ollama(prompt)
         )
     )
 
 
+# ============================================================
+# GENERATED COUNTER-SPEECH CLEANING
+# ============================================================
 
 def clean_generated_cs(text):
 
@@ -457,17 +569,22 @@ Do NOT:
 Return ONLY the cleaned paragraph.
 
 Text:
+
 {text}
 """
 
     cleaned = call_ollama(prompt)
 
     return normalize_text(
-
         clean_output_text(
             cleaned
         )
     )
+
+
+# ============================================================
+# TOXICITY EVALUATION
+# ============================================================
 
 def get_toxicity_score(text):
 
@@ -477,10 +594,12 @@ def get_toxicity_score(text):
             "text": text
         },
 
-        "languages": ["en"],
+        "languages": [
+            PERSPECTIVE_LANGUAGE
+        ],
 
         "requestedAttributes": {
-            "TOXICITY": {}
+            PERSPECTIVE_ATTRIBUTE: {}
         }
     }
 
@@ -488,8 +607,11 @@ def get_toxicity_score(text):
 
         response = requests.post(
             PERSPECTIVE_URL,
+            params={
+                "key": PERSPECTIVE_API_KEY
+            },
             json=payload,
-            timeout=20
+            timeout=PERSPECTIVE_TIMEOUT
         )
 
         response.raise_for_status()
@@ -499,7 +621,7 @@ def get_toxicity_score(text):
         return data[
             "attributeScores"
         ][
-            "TOXICITY"
+            PERSPECTIVE_ATTRIBUTE
         ][
             "summaryScore"
         ][
@@ -516,6 +638,9 @@ def get_toxicity_score(text):
         return None
 
 
+# ============================================================
+# EVALUATION METRICS
+# ============================================================
 
 def compute_scores(
     reference,
@@ -523,7 +648,7 @@ def compute_scores(
 ):
 
     scorer = rouge_scorer.RougeScorer(
-        ["rouge2"],
+        [ROUGE_METRIC],
         use_stemmer=True
     )
 
@@ -534,13 +659,14 @@ def compute_scores(
 
     bleu2 = sacrebleu.corpus_bleu(
         [generated],
-        [[reference]]
+        [[reference]],
+        tokenize=BLEU_TOKENIZATION
     ).score
 
     P, R, F1 = bert_score(
         [generated],
         [reference],
-        lang="en"
+        lang=BERTSCORE_LANGUAGE
     )
 
     toxicity = get_toxicity_score(
@@ -559,95 +685,75 @@ def compute_scores(
     }
 
 
+# ============================================================
+# PROCESS SINGLE HATE-SPEECH INSTANCE
+# ============================================================
+
 def process_row(hate_speech):
 
     hate_speech = normalize_text(
         hate_speech
     )
 
-
     queries = generate_queries(
         hate_speech
     )
 
-    if len(queries) < 2:
+    # Fallback if fewer than the required queries are generated
+    while len(queries) < NUM_SEARCH_QUERIES:
+        queries.append(hate_speech)
 
-        queries = (
-            queries +
-            [hate_speech]
+    queries = queries[:NUM_SEARCH_QUERIES]
+
+    # Retrieve evidence from FAISS and Tavily
+    faiss_results = []
+    tavily_results = []
+
+    for query in queries:
+
+        faiss_results.append(
+            search_corpus(
+                query,
+                k=RETRIEVAL_TOP_K
+            )
         )
 
-    q1, q2 = queries[:2]
-
-
-    faiss_q1 = search_corpus(
-        q1,
-        k=2
-    )
-
-    faiss_q2 = search_corpus(
-        q2,
-        k=2
-    )
-
-    tav_q1 = tavily_search(
-        q1,
-        k=2
-    )
-
-    tav_q2 = tavily_search(
-        q2,
-        k=2
-    )
-
+        tavily_results.append(
+            tavily_search(
+                query,
+                k=TAVILY_MAX_RESULTS
+            )
+        )
 
     all_docs = []
 
-    for d in faiss_q1:
+    for query, results in zip(queries, faiss_results):
 
-        all_docs.append({
+        for d in results:
 
-            "source": "faiss",
+            all_docs.append({
 
-            "query": q1,
+                "source": "faiss",
 
-            "text": d["text"]
-        })
+                "query": query,
 
-    for d in faiss_q2:
+                "text": d["text"]
+            })
 
-        all_docs.append({
+    for query, results in zip(queries, tavily_results):
 
-            "source": "faiss",
+        for d in results:
 
-            "query": q2,
+            all_docs.append({
 
-            "text": d["text"]
-        })
+                "source": "tavily",
 
-    for d in tav_q1:
+                "query": query,
 
-        all_docs.append({
+                "text": d["text"]
+            })
 
-            "source": "tavily",
-
-            "query": q1,
-
-            "text": d["text"]
-        })
-
-    for d in tav_q2:
-
-        all_docs.append({
-
-            "source": "tavily",
-
-            "query": q2,
-
-            "text": d["text"]
-        })
-
-
+    # Grade retrieved documents
     relevant_docs = []
 
     for d in all_docs:
@@ -659,97 +765,95 @@ def process_row(hate_speech):
         )
 
         if is_relevant:
-
             relevant_docs.append(d)
 
-
+    # Fallback to first Tavily result if no document is relevant
     if len(relevant_docs) == 0:
 
-        if len(tav_q1) > 0:
+        if tavily_results and len(tavily_results[0]) > 0:
 
             relevant_docs.append({
 
                 "source": "tavily",
 
-                "query": q1,
+                "query": queries[0],
 
-                "text": tav_q1[0]["text"]
+                "text": tavily_results[0][0]["text"]
             })
 
-
     doc_texts = [
-
         d["text"]
-
         for d in relevant_docs
     ]
 
+    # Evidence summarization
     final_summary = aggregate_evidence(
         doc_texts,
         hate_speech
     )
 
-
+    # Counter-speech generation
     counter_speech = generate_cs(
         final_summary,
         hate_speech
     )
 
-
     counter_speech = clean_generated_cs(
         counter_speech
     )
 
-
+    # Evaluation
     scores = compute_scores(
         final_summary,
         counter_speech
     )
 
+    # Prepare output
+    retrieval_output = {}
+
+    for i, query in enumerate(queries):
+
+        retrieval_output[f"query_{i + 1}"] = {
+
+            "query": query,
+
+            "faiss_results": faiss_results[i],
+
+            "tavily_results": tavily_results[i]
+        }
 
     output = {
 
         "hate_speech": hate_speech,
 
-        "retrieval_results": {
+        "retrieval_results": retrieval_output,
 
-            "query_1": {
+        "num_relevant_docs": len(relevant_docs),
 
-                "query": q1,
+        "summary": final_summary,
 
-                "faiss_results": faiss_q1,
+        "generated_counter_speech": counter_speech,
 
-                "tavily_results": tav_q1
-            },
-
-            "query_2": {
-
-                "query": q2,
-
-                "faiss_results": faiss_q2,
-
-                "tavily_results": tav_q2
-            }
-        },
-
-        "num_relevant_docs":
-            len(relevant_docs),
-
-        "summary":
-            final_summary,
-
-        "generated_counter_speech":
-            counter_speech,
-
-        "scores":
-            scores
+        "scores": scores
     }
 
     return output
 
 
+# ============================================================
+# PROCESS DATASET
+# ============================================================
 
 def process_dataset(df):
+
+    output_directory = os.path.dirname(
+        os.path.abspath(OUTPUT_JSONL)
+    )
+
+    os.makedirs(
+        output_directory,
+        exist_ok=True
+    )
 
     with open(
         OUTPUT_JSONL,
@@ -763,9 +867,7 @@ def process_dataset(df):
         ):
 
             hate_speech = normalize_text(
-
                 row["hate_speech"]
-
             )
 
             result = process_row(
@@ -773,13 +875,11 @@ def process_dataset(df):
             )
 
             f.write(
-
                 json.dumps(
                     result,
                     ensure_ascii=False,
                     indent=2
                 )
-
                 + "\n\n"
             )
 
@@ -790,27 +890,22 @@ def process_dataset(df):
     print(OUTPUT_JSONL)
 
 
+# ============================================================
+# MAIN EXECUTION
+# ============================================================
 
 if __name__ == "__main__":
 
     df = pd.read_csv(
-
         DATASET_PATH,
-
         encoding="utf-8-sig",
-
         encoding_errors="ignore",
-
         engine="python"
     )
 
-
     df["hate_speech"] = (
-
         df["hate_speech"]
-
         .astype(str)
-
         .apply(normalize_text)
     )
 
