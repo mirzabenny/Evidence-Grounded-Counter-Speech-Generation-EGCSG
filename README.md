@@ -29,7 +29,7 @@ fact_cn/
 │   ├── average_factual_accuracy.py
 │   └── average_scores.py
 │
-├── .env.example
+├── .env
 ├── .gitignore
 ├── requirements.txt
 └── README.md
@@ -141,25 +141,51 @@ The proposed framework consists of the following stages:
 
 Python 3.10 or a compatible version is recommended.
 
-Create and activate a virtual environment:
+### 1. Clone the repository
 
 ```bash
-python -m venv .venv
+git clone https://github.com/mirzabenny/Evidence-Grounded-Counter-Speech-Generation-EGCSG.git
+cd Evidence-Grounded-Counter-Speech-Generation-EGCSG
 ```
 
-Windows:
+### 2. Activate the Conda environment
 
-```powershell
-.venv\Scripts\activate
+Open the project in Visual Studio Code and open its integrated terminal.
+
+Activate the Conda environment:
+
+```bash
+conda activate cn
 ```
 
-Install the required dependencies:
+If the environment does not exist, create it and activate it:
+
+```bash
+conda create -n cn python=3.10
+conda activate cn
+```
+
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Additional requirements:
+### 4. Set up Ollama
+
+Install Ollama and open a separate Windows Command Prompt (CMD).
+
+Pull and run the required model:
+
+```bash
+ollama run mistral
+```
+
+Keep Ollama running while executing the EGCSG pipeline.
+
+The Ollama model configured in the local environment must match the model used by the scripts.
+
+## Additional Requirements
 
 - Ollama installed and running locally.
 - The required Ollama model downloaded.
@@ -169,17 +195,15 @@ Additional requirements:
 
 ## Configuration
 
-Configuration values, including local file paths, model settings, API endpoints, and API keys, should be supplied through a local `.env` file.
+Configuration values, including local file paths, model settings, API endpoints, and API keys, should be supplied through a local `.env` file in the repository root.
 
-Create a `.env` file in the repository root using `.env.example` as a reference.
+Users should configure the `.env` file with their own local paths, model settings, and API credentials before executing the scripts.
 
-Do not commit `.env` or expose API keys in source code.
-
-The `.env.example` file should contain placeholder values only.
+Do not commit actual API keys or other sensitive credentials to the repository.
 
 ## Execution
 
-Run the scripts from the repository root.
+Run the scripts from the repository root using the activated Conda environment.
 
 ### Step 1: Prepare the static corpus
 
@@ -196,6 +220,8 @@ python scripts/build_corpus_improved.py
 ### Step 3: Generate counter-speech
 
 After configuring the input dataset and corresponding output file:
+
+For the Knowledge-Grounded CONAN dataset:
 
 ```bash
 python scripts/counter_speech_generation.py --dataset kn
@@ -240,7 +266,6 @@ The repository provides the implementation scripts, input datasets, and structur
 The JSONL files retain the retrieval results, generated evidence summaries, counter-speech responses, and evaluation scores for each processed input. This enables researchers to inspect the intermediate pipeline outputs and conduct further analysis.
 
 Reproducing the complete pipeline requires the NEWSROOM corpus, the configured embedding model, FAISS index construction, the selected Ollama model, and access to the required external APIs.
-
 
 ## License
 
